@@ -2,192 +2,373 @@
 <html lang="th">
 <head>
     <meta charset="UTF-8">
-    <title>AR Hand Control Game</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AR Mario Jump Adventure</title>
+    <!-- นำเข้า Phaser.js สำหรับตัวเกม -->
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
+    <!-- นำเข้า MediaPipe Hands สำหรับตรวจจับมือ -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-
     <style>
         body {
-            margin: 0; padding: 0;
-            background-color: #222;
-            display: flex; flex-direction: column;
-            align-items: center; justify-content: center;
-            height: 100vh; color: white; font-family: sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Arial', sans-serif;
         }
-        /* จอเกมของเรา */
-        canvas {
-            border: 4px solid #fff;
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        /* วิดีโอจากกล้อง เป็นฉากหลัง */
+        #input_video {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            min-width: 100%;
+            min-height: 100%;
+            width: auto;
+            height: auto;
+            z-index: 0;
+            transform: translate(-50%, -50%) scaleX(-1); /* กลับด้านกระจกเงาเพื่อให้ควบคุมง่าย */
+            object-fit: cover;
+        }
+        /* พื้นที่แสดงเกม Phaser อยู่ด้านบนสุด */
+        #game-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+        }
+        /* หน้าจอโหลดและคำแนะนำ */
+        #loading-screen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+            text-align: center;
+            padding: 20px;
+        }
+        .instruction-box {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
             border-radius: 10px;
-            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
-            background-color: #87CEEB; /* สีฟ้าเหมือนท้องฟ้ามาริโอ้ */
+            margin-top: 20px;
+            text-align: left;
         }
-        video { display: none; } /* ซ่อนวิดีโอต้นฉบับไว้ */
-        #status { margin-top: 10px; font-size: 24px; font-weight: bold; color: #00FF00;}
+        .instruction-box h3 { margin-top: 0; color: #FFD700; }
+        .loading-spinner {
+            border: 8px solid #f3f3f3; border-top: 8px solid #3498db;
+            border-radius: 50%; width: 60px; height: 60px;
+            animation: spin 2s linear infinite; margin-bottom: 20px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
-    <h2>บังคับด้วยมือ: ขวา=ไปขวา, ซ้าย=ไปซ้าย, แบมือ=กระโดด, กำมือ=หยุด</h2>
-    <video id="input_video" autoplay playsinline></video>
-    <canvas id="game_canvas" width="800" height="450"></canvas>
-    <div id="status">กำลังโหลดกล้องและ AI...</div>
+<div id="container">
+    <!-- วิดีโอสำหรับรับภาพจากกล้อง (ซ่อนไว้ ไม่แสดงผลตรงๆ) -->
+    <video id="input_video" playsinline></video>
+    <!-- คอนเทนเนอร์สำหรับเกม -->
+    <div id="game-container"></div>
 
-    <script>
-        // ==========================================
-        // ส่วนที่ 1: ตั้งค่าตัวละครเกมและฟิสิกส์
-        // ==========================================
-        const canvas = document.getElementById('game_canvas');
-        const ctx = canvas.getContext('2d');
-        const statusText = document.getElementById('status');
+    <!-- หน้าจอโหลด -->
+    <div id="loading-screen">
+        <div class="loading-spinner"></div>
+        <h2>กำลังเตรียมระบบ AR...</h2>
+        <p>กรุณาอนุญาตให้ใช้กล้อง และรอสักครู่</p>
+        <div class="instruction-box">
+            <h3>วิธีควบคุม (ใช้มือเดียว):</h3>
+            <ul>
+                <li>🖐️ **แบมือ (ขยับไปซ้าย/ขวาของจอ):** วิ่งซ้าย/ขวา</li>
+                <li>✊ **กำมือ (ค้างไว้):** หยุดวิ่ง</li>
+                <li>🖐️⬆️ **แบมือ + ยกขึ้นเร็วๆ (ทำท่ากระโดด):** กระโดด</li>
+            </ul>
+            <p style="font-size: 0.9em; color: #aaa;">*ระยะห่างที่เหมาะสม: 0.5 - 1.5 เมตรจากกล้อง</p>
+        </div>
+    </div>
+</div>
 
-        // ข้อมูลตัวละครของเรา (กล่องสี่เหลี่ยมสีแดง)
-        let player = {
-            x: 100,
-            y: 300,
-            width: 40,
-            height: 40,
-            speed: 5,        // ความเร็วการเดิน
-            velocityY: 0,    // ความเร็วการร่วง (แรงโน้มถ่วง)
-            gravity: 0.8,    // แรงดึงดูด
-            jumpPower: -15,  // พลังกระโดด (ติดลบคือพุ่งขึ้นจอ)
-            isGrounded: false // แตะพื้นอยู่ไหม
-        };
+<script>
+    // --- ส่วนของตัวแปรควบคุมเกมจาก AR ---
+    let arControl = {
+        moveX: 0, // -1 (ซ้าย), 0 (หยุด), 1 (ขวา)
+        jumpTrigger: false, // true เมื่อต้องการกระโดด
+        isFist: false, // สถานะกำมือ
+        handDetected: false // ตรวจพบมือหรือไม่
+    };
+    
+    let lastWristY = 0; // ใช้สำหรับตรวจจับท่ากระโดด (ยกมือขึ้น)
 
-        const groundY = 400; // ระดับความสูงของพื้นดิน
+    // --- ส่วนของ MediaPipe Hands (AR Logic) ---
+    const videoElement = document.getElementById('input_video');
+    const loadingScreen = document.getElementById('loading-screen');
 
-        // ตัวแปรเก็บคำสั่งที่ได้จากมือ
-        let currentCommand = "หยุด";
-
-        // ==========================================
-        // ส่วนที่ 2: ลอจิกการเล่นเกม (Game Loop)
-        // ==========================================
-        function updateGame() {
-            // 1. นำคำสั่งจากมือมาขยับตัวละคร
-            if (currentCommand === "ไปขวา") {
-                player.x += player.speed;
-            } else if (currentCommand === "ไปซ้าย") {
-                player.x -= player.speed;
-            }
-
-            // ถ้าสั่งกระโดด และตัวละครเหยียบพื้นอยู่ ให้กระโดดได้
-            if (currentCommand === "กระโดด" && player.isGrounded) {
-                player.velocityY = player.jumpPower;
-                player.isGrounded = false;
-            }
-
-            // 2. ระบบฟิสิกส์ (แรงโน้มถ่วง)
-            player.velocityY += player.gravity; // ตัวละครจะถูกดึงลงมาเรื่อยๆ
-            player.y += player.velocityY;
-
-            // เช็คการชนพื้น
-            if (player.y + player.height >= groundY) {
-                player.y = groundY - player.height;
-                player.velocityY = 0;
-                player.isGrounded = true;
-            }
-
-            // ป้องกันเดินทะลุขอบจอ
-            if (player.x < 0) player.x = 0;
-            if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+    function onResults(results) {
+        if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+            arControl.handDetected = false;
+            arControl.moveX = 0;
+            return;
         }
 
-        function drawGame() {
-            // ล้างหน้าจอทุกเฟรม
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // วาดพื้นดิน
-            ctx.fillStyle = "#8B4513"; // สีน้ำตาล
-            ctx.fillRect(0, groundY, canvas.width, canvas.height - groundY);
-            ctx.fillStyle = "#228B22"; // หญ้าสีเขียว
-            ctx.fillRect(0, groundY, canvas.width, 20);
-
-            // วาดตัวละคร
-            ctx.fillStyle = "#FF0000"; // สีแดง
-            ctx.fillRect(player.x, player.y, player.width, player.height);
+        // ซ่อนหน้าจอโหลดเมื่อเจอครั้งแรก
+        if (loadingScreen.style.display !== 'none') {
+            loadingScreen.style.display = 'none';
         }
 
-        // วงจรของเกม (รัน 60 รอบต่อวินาที)
-        function gameLoop() {
-            updateGame();
-            drawGame();
-            requestAnimationFrame(gameLoop);
-        }
+        arControl.handDetected = true;
+        const landmarks = results.multiHandLandmarks[0]; // ใช้มือแรกที่เจอ
 
-        // ==========================================
-        // ส่วนที่ 3: ระบบ AI วิเคราะห์ท่าทางมือ
-        // ==========================================
-        function onResults(results) {
-            // ซ่อนข้อความโหลดเมื่อกล้องติด
-            if(results.multiHandLandmarks.length > 0) {
-                
-                const hand = results.multiHandLandmarks[0]; // ดึงข้อมูลมือข้างแรกที่เจอ
-                
-                // จุดต่างๆ บนมือ (จุดที่ 0 คือข้อมือ, 4 คือปลายนิ้วโป้ง, 8 คือปลายนิ้วชี้, 20 คือปลายนิ้วก้อย)
-                const wrist = hand[0];
-                const thumbTip = hand[4];
-                const indexTip = hand[8];
-                const middleTip = hand[12];
-                const pinkyTip = hand[20];
+        // 1. ตรวจจับการกำมือ (Fist Detection)
+        // วิธีการ: เช็คระยะห่างระหว่างปลายนิ้วกับฐานนิ้ว ถ้าน้อยมาก = กำมือ
+        const wrist = landmarks[0];
+        const fingertips = [landmarks[8], landmarks[12], landmarks[16], landmarks[20]]; // ชี้, กลาง, นาง, ก้อย
+        let fingersClosed = 0;
+        fingertips.forEach(tip => {
+             // คำนวณระยะห่างแบบ Euclidean distance อย่างง่าย
+             const dist = Math.sqrt(Math.pow(tip.x - wrist.x, 2) + Math.pow(tip.y - wrist.y, 2));
+             // ถ้า distance น้อยกว่า threshold แสดงว่ามือกำลังกำ (ค่า 0.3 ปรับจากการทดสอบ)
+             if (dist < 0.35) fingersClosed++;
+        });
 
-                // ลอจิกการวิเคราะห์ท่าทาง (Gesture Recognition)
-                
-                // เช็คว่า "กำมือ" หรือไม่? (ถ้าระยะปลายนิ้วชี้ อยู่ต่ำกว่า/ใกล้ข้อมือมากกว่าปกติ)
-                // (ใน Canvas ค่า Y ยิ่งมาก คือยิ่งอยู่ด้านล่าง)
-                let isFist = (indexTip.y > hand[5].y) && (middleTip.y > hand[9].y);
-                
-                // เช็คว่า "แบมือ (กระโดด)" หรือไม่? (ปลายนิ้วทุกนิ้วกางขึ้น และอยู่สูงกว่าข้อต่อ)
-                let isOpen = (indexTip.y < hand[5].y) && (middleTip.y < hand[9].y) && (pinkyTip.y < hand[17].y);
+        arControl.isFist = (fingersClosed >= 3); // ถ้าพับ 3 นิ้วขึ้นไป ถือว่ากำ
 
-                // เช็คทิศทางซ้ายขวา (เปรียบเทียบแกน X ของนิ้วกับข้อมือ)
-                let isThumbRight = thumbTip.x < wrist.x; // *หมายเหตุ: ภาพกล้องเว็บแคมมักจะกลับซ้ายขวา (Mirror)
-                let isPinkyLeft = pinkyTip.x > wrist.x;
-
-                // กำหนดคำสั่งเกมจากท่าทาง
-                if (isFist) {
-                    currentCommand = "หยุด";
-                } else if (isOpen) {
-                    currentCommand = "กระโดด";
-                } else if (isThumbRight && !isOpen) { // ชูนิ้วโป้งไปทางขวา
-                    currentCommand = "ไปขวา";
-                } else if (isPinkyLeft && !isOpen) { // ชูนิ้วก้อยไปทางซ้าย
-                    currentCommand = "ไปซ้าย";
-                } else {
-                    currentCommand = "หยุด"; // ท่าอื่นๆ ให้หยุด
-                }
-
-                statusText.innerText = "คำสั่งปัจจุบัน: " + currentCommand;
+        // 2. ตรวจจับการเคลื่อนที่ ซ้าย/ขวา (เมื่อไม่ได้กำมือ)
+        if (arControl.isFist) {
+            arControl.moveX = 0; // กำมือ = หยุด
+        } else {
+            // ใช้ตำแหน่ง X ของข้อมือ (wrist.x) เทียบกับหน้าจอ (0.0 ซ้ายสุด - 1.0 ขวาสุด)
+            const handX = wrist.x;
+            if (handX < 0.4) {
+                arControl.moveX = -1; // อยู่โซนซ้าย
+            } else if (handX > 0.6) {
+                arControl.moveX = 1; // อยู่โซนขวา
             } else {
-                statusText.innerText = "มองไม่เห็นมือ ✋";
-                currentCommand = "หยุด";
+                arControl.moveX = 0; // อยู่ตรงกลาง
+            }
+
+            // 3. ตรวจจับการกระโดด (Jump Gesture - ยกมือขึ้นเร็วๆ)
+            // ตรวจสอบการเปลี่ยนแปลงของตำแหน่ง Y (แกนตั้ง)
+            const currentWristY = wrist.y;
+            // ถ้าค่า Y ลดลงอย่างรวดเร็ว (แปลว่ามือขยับขึ้นบนจอ) และไม่ได้กำมือ
+            if (lastWristY - currentWristY > 0.08 && !arControl.isFist) {
+                arControl.jumpTrigger = true;
+                // รีเซ็ต trigger หลังจากสักครู่เพื่อป้องกันการโดดรัว
+                setTimeout(() => { arControl.jumpTrigger = false; }, 300);
+            }
+            lastWristY = currentWristY;
+        }
+    }
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1, // 0=lite, 1=full (แม่นยำกว่า แต่กินแรงเครื่องมากกว่านิดหน่อย)
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+    });
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 1280,
+        height: 720
+    });
+    camera.start().catch(err => {
+        alert("ไม่สามารถเข้าถึงกล้องได้ กรุณาตรวจสอบการอนุญาต: " + err);
+    });
+
+
+    // --- ส่วนของเกม Phaser (Game Logic) ---
+    class MainScene extends Phaser.Scene {
+        constructor() {
+            super({ key: 'MainScene' });
+        }
+
+        preload() {
+            // สร้าง Graphics ชั่วคราวแทนการโหลดไฟล์รูปภาพเพื่อให้เป็นไฟล์เดียว
+            // ผู้เล่น (สี่เหลี่ยมสีแดง เหมือนมาริโอ้ชุดแดง)
+            let playerGfx = this.make.graphics().fillStyle(0xff0000).fillRect(0, 0, 32, 48);
+            playerGfx.generateTexture('player', 32, 48);
+
+            // พื้นดิน/บล็อก (สี่เหลี่ยมสีน้ำตาล/เขียว)
+            let groundGfx = this.make.graphics().fillStyle(0x654321).fillRect(0, 0, 64, 64).fillStyle(0x00ff00, 0.5).fillRect(0,0,64,10);
+            groundGfx.generateTexture('ground', 64, 64);
+
+            // เหรียญเก็บคะแนน (วงกลมสีทอง)
+            let coinGfx = this.make.graphics().fillStyle(0xFFD700).fillCircle(16, 16, 16);
+            coinGfx.generateTexture('coin', 32, 32);
+
+            // สิ่งกีดขวาง (สี่เหลี่ยมสีม่วงมีหนาม)
+            let spikeGfx = this.make.graphics().fillStyle(0x551a8b).fillTriangle(0, 32, 16, 0, 32, 32);
+            spikeGfx.generateTexture('spike', 32, 32);
+        }
+
+        create() {
+            // ตั้งค่าโลกและกล้อง
+            this.physics.world.setBounds(0, 0, 3200, window.innerHeight);
+            this.cameras.main.setBounds(0, 0, 3200, window.innerHeight);
+
+            // สร้างกลุ่มพื้นดิน
+            this.platforms = this.physics.add.staticGroup();
+            // พื้นยาวตลอดแนว
+            for (let i = 0; i < 50; i++) {
+                this.platforms.create(i * 64, window.innerHeight - 32, 'ground').setScale(1).refreshBody();
+            }
+            // สร้างแท่นกระโดด
+            this.platforms.create(400, window.innerHeight - 150, 'ground');
+            this.platforms.create(700, window.innerHeight - 250, 'ground');
+            this.platforms.create(1000, window.innerHeight - 180, 'ground');
+            this.platforms.create(1400, window.innerHeight - 350, 'ground');
+            this.platforms.create(1800, window.innerHeight - 200, 'ground');
+            this.platforms.create(2200, window.innerHeight - 400, 'ground');
+
+            // สร้างผู้เล่น
+            this.player = this.physics.add.sprite(100, window.innerHeight - 100, 'player');
+            this.player.setBounce(0.1);
+            this.player.setCollideWorldBounds(true);
+            this.physics.add.collider(this.player, this.platforms);
+            
+            // ให้กล้องติดตามผู้เล่น
+            this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+
+            // สร้างเหรียญ
+            this.coins = this.physics.add.group({
+                key: 'coin',
+                repeat: 15,
+                setXY: { x: 300, y: window.innerHeight - 200, stepX: 150 }
+            });
+            this.coins.children.iterate((child) => {
+                child.setBounceY(Phaser.Math.FloatBetween(0.2, 0.4));
+                // สุ่มตำแหน่ง Y เล็กน้อย
+                child.y = Phaser.Math.Between(window.innerHeight - 400, window.innerHeight - 150);
+            });
+            this.physics.add.collider(this.coins, this.platforms);
+            this.physics.add.overlap(this.player, this.coins, this.collectCoin, null, this);
+
+            // สร้างสิ่งกีดขวาง
+            this.spikes = this.physics.add.group();
+            this.spikes.create(600, window.innerHeight - 80, 'spike');
+            this.spikes.create(1200, window.innerHeight - 80, 'spike');
+            this.spikes.create(2000, window.innerHeight - 80, 'spike');
+            this.spikes.create(2500, window.innerHeight - 80, 'spike');
+            this.physics.add.collider(this.spikes, this.platforms);
+            this.physics.add.overlap(this.player, this.spikes, this.hitSpike, null, this);
+
+            // UI คะแนน
+            this.score = 0;
+            this.scoreText = this.add.text(16, 16, 'Score: 0', { fontSize: '32px', fill: '#fff', stroke: '#000', strokeThickness: 4 });
+            this.scoreText.setScrollFactor(0); // ให้คะแนนติดอยู่กับหน้าจอ ไม่เลื่อนตามกล้อง
+
+            // UI สถานะมือ (Debug)
+            this.statusText = this.add.text(16, 60, 'Waiting for hand...', { fontSize: '20px', fill: '#0f0', stroke: '#000', strokeThickness: 2 });
+            this.statusText.setScrollFactor(0);
+        }
+
+        update() {
+            // --- เชื่อมต่อ AR Control เข้ากับฟิสิกส์ของเกม ---
+            const speed = 250;
+            const jumpForce = -450;
+
+            // อัปเดตสถานะ UI
+            if (arControl.handDetected) {
+                let statusStr = arControl.isFist ? "Status: STOP (Fist)" : "Status: MOVE (Open Hand)";
+                if (arControl.moveX === -1) statusStr += " <- LEFT";
+                if (arControl.moveX === 1) statusStr += " RIGHT ->";
+                this.statusText.setText(statusStr);
+                this.statusText.setColor(arControl.isFist ? '#ff0' : '#0f0');
+            } else {
+                this.statusText.setText("Cannot detect hand!");
+                this.statusText.setColor('#f00');
+            }
+            
+            // การเคลื่อนที่แนวนอน
+            if (arControl.moveX === -1) {
+                this.player.setVelocityX(-speed);
+            } else if (arControl.moveX === 1) {
+                this.player.setVelocityX(speed);
+            } else {
+                // หยุดเมื่ออยู่ตรงกลาง หรือ กำมือ หรือ ไม่เจอมือ
+                this.player.setVelocityX(0);
+            }
+
+            // การกระโดด (ต้องอยู่บนพื้นด้วย)
+            if (arControl.jumpTrigger && this.player.body.touching.down) {
+                this.player.setVelocityY(jumpForce);
+                arControl.jumpTrigger = false; // ใช้แล้วรีเซ็ตทันที
+            }
+
+            // ตกเหว (ถ้ามี) -> รีเซ็ตเกม
+            if (this.player.y > window.innerHeight + 100) {
+                this.scene.restart();
             }
         }
 
-        // ตั้งค่า MediaPipe Hands
-        const hands = new Hands({locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        }});
-        hands.setOptions({
-            maxNumHands: 1, // จับมือเดียว
-            modelComplexity: 1,
-            minDetectionConfidence: 0.7, // เพิ่มความแม่นยำ (กันหลุด)
-            minTrackingConfidence: 0.7
-        });
-        hands.onResults(onResults);
+        collectCoin(player, coin) {
+            coin.disableBody(true, true);
+            this.score += 10;
+            this.scoreText.setText('Score: ' + this.score);
+            
+            // ชนะเกมเมื่อเก็บหมด
+            if (this.coins.countActive(true) === 0) {
+                 this.add.text(window.innerWidth/2, window.innerHeight/2, 'YOU WIN!', { fontSize: '64px', fill: '#fff', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5).setScrollFactor(0);
+                 this.physics.pause();
+            }
+        }
 
-        // เปิดกล้องและส่งภาพให้ AI
-        const videoElement = document.getElementById('input_video');
-        const camera = new Camera(videoElement, {
-            onFrame: async () => {
-                await hands.send({image: videoElement});
-            },
-            width: 640,
-            height: 480
-        });
-        
-        camera.start(); // เริ่มกล้อง
-        gameLoop();     // เริ่มเกม
+        hitSpike(player, spike) {
+            this.physics.pause();
+            player.setTint(0xff0000);
+            this.add.text(window.innerWidth/2, window.innerHeight/2, 'GAME OVER', { fontSize: '64px', fill: '#f00', stroke: '#000', strokeThickness: 6 }).setOrigin(0.5).setScrollFactor(0);
+            // รีสตาร์ทหลังจาก 2 วินาที
+            setTimeout(() => {
+                this.scene.restart();
+            }, 2000);
+        }
+    }
 
-    </script>
+    // ตั้งค่า Phaser Game Config
+    const config = {
+        type: Phaser.AUTO,
+        parent: 'game-container',
+        width: window.innerWidth,
+        height: window.innerHeight,
+        transparent: true, // สำคัญมาก! ทำให้พื้นหลังเกมใส เพื่อเห็นกล้อง
+        physics: {
+            default: 'arcade',
+            arcade: {
+                gravity: { y: 600 },
+                debug: false
+            }
+        },
+        scene: MainScene,
+        scale: {
+            mode: Phaser.Scale.RESIZE, // ปรับขนาดตามหน้าจออัตโนมัติ
+            autoCenter: Phaser.Scale.CENTER_BOTH
+        }
+    };
+
+    // เริ่มต้นเกมเมื่อโหลดหน้าเว็บเสร็จ
+    window.addEventListener('load', () => {
+        new Phaser.Game(config);
+    });
+
+</script>
+
 </body>
 </html>
